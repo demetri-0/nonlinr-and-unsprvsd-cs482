@@ -5,8 +5,11 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder
+from sklearn.preprocessing import StandardScaler, RobustScaler
 
 data = pd.read_csv("houseSalePrices.csv")
 
@@ -31,7 +34,10 @@ x_train, x_test, y_train, y_test = train_test_split(X, y,
 
 """ ******** Data Preprocessing ******** """
 
+# drop singular identifier column
 X = X.drop(columns=["Id"], axis=1)
+
+""" -- Missing Value Handling -- """
 
 # obtain features that have missing values along with all their unique values
 print("-- Features with NaN Values --\n")
@@ -42,26 +48,30 @@ for mvf in missing_value_features:
     percent_missing = round(X[mvf].isna().mean() * 100, 2) # quantity of NaN values for a feature multiplied by 100 and rounded to two decimals
 
     print(f"{mvf}: {total_missing} ({percent_missing}%)")
-    # print(f"Unique Values: {X[mvf].unique()}\n")
-print()
+    print(f"Unique Values: {X[mvf].unique()}\n")
+
+print("-- Masonry Veneer Metrics --\n")
 
 # metrics for masonry veneers - need to take a closer look at related features after seeing missing value counts
-print("-- Metrics for Masonry Veneers --")
-print(f"N/A Type Total: {X['MasVnrType'].isna().sum()}")
-print(f"N/A Area Total: {((X['MasVnrArea'].isna()) | (X['MasVnrArea'] == 0)).sum()}\n")
+print(f"NaN MasVnrType Total: {X['MasVnrType'].isna().sum()}")
+print(f"NaN MasVnrArea Total: {((X['MasVnrArea'].isna()) | (X['MasVnrArea'] == 0)).sum()}\n")
 
+# obtain lists and print metrics for masonry veneers that don't exist, and masonry veneers that were not fully recorded
 true_missing_masonry_cond = X['MasVnrType'].isna() & (X['MasVnrArea'].isna() | (X['MasVnrArea'] == 0))
 valid_type_nan_area_cond = ~(X['MasVnrType'].isna()) & (X['MasVnrArea'].isna() | (X['MasVnrArea'] == 0))
 nan_type_valid_area_cond = X['MasVnrType'].isna() & ~(X['MasVnrArea'].isna() | (X['MasVnrArea'] == 0))
-print(f"N/A Type + N/A Area Count: {true_missing_masonry_cond.sum()}") # truly missing masonry veneers
-print(f"Valid Type + N/A Area Count: {valid_type_nan_area_cond.sum()}") # area not calculated
-print(f"N/A Type + Valid Area Count: {nan_type_valid_area_cond.sum()}") # type not recorded
+print(f"NaN MasVnrType + NaN MasVnrArea Count: {true_missing_masonry_cond.sum()}") # truly missing masonry veneers
+print(f"Valid MasVnrType + NaN MasVnrArea Count: {valid_type_nan_area_cond.sum()}") # area not calculated
+print(f"NaN MasVnrType + Valid MasVnrArea Count: {nan_type_valid_area_cond.sum()}\n") # type not recorded
 
+X.loc[true_missing_masonry_cond, "MasVnrType"] = "None" # "None" assigned to masonry veneer types that don't exist
+X.loc[true_missing_masonry_cond, "MasVnrArea"] = 0 # 0 assigned to masonry veneer areas that don't exist
 
-X.loc[true_missing_masonry_cond, "MasVnrType"] = "None"
-X.loc[true_missing_masonry_cond, "MasVnrArea"] = 0
+# mode obtained and assigned to masonry veneer types that were not recorded
 masvnrtype_mode = X.loc[X["MasVnrType"].notna(), "MasVnrType"].mode()[0]
 X.loc[nan_type_valid_area_cond, "MasVnrType"] = masvnrtype_mode
+
+# median obtained and assigned to masonry veneer areas that were not recorded
 masvnrarea_median = X.loc[(X["MasVnrArea"].notna()) & (X["MasVnrArea"] > 0), "MasVnrArea"].median()
 X.loc[valid_type_nan_area_cond, "MasVnrArea"] = masvnrarea_median
 
@@ -107,5 +117,93 @@ X[replace_with_0] = zero_imputer.fit_transform(X[replace_with_0])
 median_imputer = SimpleImputer(strategy="median")
 X[replace_with_median] = median_imputer.fit_transform(X[replace_with_median])
 
+X.drop(columns=features_to_drop, inplace=True)
+
+""" -- Scaling and Encoding -- """
+
+print("-- Features Sorting --\n")
 numeric_features = X.select_dtypes(include="number").columns.tolist()
 categorical_features = X.select_dtypes(include="object").columns.tolist()
+print(f"Numeric Features\n{numeric_features}\n")
+print(f"Categorical Features\n{categorical_features}\n")
+
+scale_robust = []
+scale_standard = []
+for col in numeric_features:
+    if X[col].skew() > 1:
+        scale_robust.append(col)
+    else:
+        scale_standard.append(col)
+
+print("-- Unique Values for Categorical Features --\n")
+for col in categorical_features:
+    print(f"{col}:{X[col].unique()}\n")
+
+# features to be encoded using OHE
+encode_ohe = [
+    "MSZoning",
+    "Street",
+    "Alley",
+    "LotShape",
+    "LandContour",
+    "Utilities",
+    "LotConfig",
+    "LandSlope",
+    "Condition1",
+    "Condition2",
+    "BldgType",
+    "HouseStyle",
+    "RoofStyle",
+    "RoofMatl",
+    "Exterior1st",
+    "Exterior2nd",
+    "MasVnrType",
+    "Foundation",
+    "BsmtFinType1",
+    "BsmtFinType2",
+    "Heating",
+    "Electrical",
+    "Functional",
+    "GarageType",
+    "GarageFinish",
+    "PavedDrive",
+    "Fence",
+    "SaleType",
+    "SaleCondition"
+]
+
+# features to be ordinaly encoded
+encode_ordinal_mapping = {
+    "ExterQual": ["Fa", "TA", "Gd", "Ex"],
+    "ExterCond": ["Po", "Fa", "TA", "Gd", "Ex"],
+    "BsmtQual": ["None", "Fa", "TA", "Gd", "Ex"],
+    "BsmtCond": ["None", "Po", "Fa", "TA", "Gd"],
+    "BsmtExposure": ["None", "No", "Mn", "Av", "Gd"],
+    "HeatingQC": ["Po", "Fa", "TA", "Gd", "Ex"],
+    "KitchenQual": ["Fa", "TA", "Gd", "Ex"],
+    "FireplaceQu": ["None", "Po", "Fa", "TA", "Gd", "Ex"],
+    "GarageQual": ["None", "Po", "Fa", "TA", "Gd", "Ex"],
+    "GarageCond": ["None", "Po", "Fa", "TA", "Gd", "Ex"],
+    "PoolQC": ["None", "Fa", "Gd", "Ex"]
+}
+
+# features to be binary encoded
+encode_binary = [
+    "CentralAir"
+]
+
+# build encoders
+ohe_encoder = OneHotEncoder(sparse_output=False)
+ordinal_encoder = OrdinalEncoder(categories=[encode_ordinal_mapping[col_name] for col_name in encode_ordinal_mapping])
+binary_encoder = OneHotEncoder(drop="if_binary", sparse_output=False)
+
+# build preprocessor to handle scaling and encoding
+preprocessor = ColumnTransformer(
+    transformers=[
+        ("standard_scl", StandardScaler(), scale_standard),
+        ("robust_scl", RobustScaler(), scale_robust),
+        ("ohe", ohe_encoder, encode_ohe),
+        ("ordinal_enc", ordinal_encoder, [col_name for col_name in encode_ordinal_mapping]),
+        ("binary_enc", binary_encoder, encode_binary)
+    ]
+)
