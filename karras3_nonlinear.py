@@ -6,8 +6,10 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.compose import ColumnTransformer
+from sklearn.decomposition import PCA
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder
 from sklearn.preprocessing import StandardScaler, RobustScaler
 
@@ -35,45 +37,57 @@ x_train, x_test, y_train, y_test = train_test_split(X, y,
 """ ******** Data Preprocessing ******** """
 
 # drop singular identifier column
-X = X.drop(columns=["Id"], axis=1)
+x_train = x_train.drop(columns=["Id"], axis=1)
+x_test = x_test.drop(columns=["Id"], axis=1)
 
 """ -- Missing Value Handling -- """
 
 # obtain features that have missing values along with all their unique values
 print("-- Features with NaN Values --\n")
-missing_value_features = X.columns[X.isna().any()]
+missing_value_features = x_train.columns[x_train.isna().any()]
 for mvf in missing_value_features:
 
-    total_missing = X[mvf].isna().sum()
-    percent_missing = round(X[mvf].isna().mean() * 100, 2) # quantity of NaN values for a feature multiplied by 100 and rounded to two decimals
+    total_missing = x_train[mvf].isna().sum()
+    percent_missing = round(x_train[mvf].isna().mean() * 100, 2) # quantity of NaN values for a feature multiplied by 100 and rounded to two decimals
 
     print(f"{mvf}: {total_missing} ({percent_missing}%)")
-    print(f"Unique Values: {X[mvf].unique()}\n")
+    print(f"Unique Values: {x_train[mvf].unique()}\n")
 
 print("-- Masonry Veneer Metrics --\n")
 
 # metrics for masonry veneers - need to take a closer look at related features after seeing missing value counts
-print(f"NaN MasVnrType Total: {X['MasVnrType'].isna().sum()}")
-print(f"NaN MasVnrArea Total: {((X['MasVnrArea'].isna()) | (X['MasVnrArea'] == 0)).sum()}\n")
+print(f"NaN MasVnrType Total: {x_train['MasVnrType'].isna().sum()}")
+print(f"NaN MasVnrArea Total: {((x_train['MasVnrArea'].isna()) | (x_train['MasVnrArea'] == 0)).sum()}\n")
 
 # obtain lists and print metrics for masonry veneers that don't exist, and masonry veneers that were not fully recorded
-true_missing_masonry_cond = X['MasVnrType'].isna() & (X['MasVnrArea'].isna() | (X['MasVnrArea'] == 0))
-valid_type_nan_area_cond = ~(X['MasVnrType'].isna()) & (X['MasVnrArea'].isna() | (X['MasVnrArea'] == 0))
-nan_type_valid_area_cond = X['MasVnrType'].isna() & ~(X['MasVnrArea'].isna() | (X['MasVnrArea'] == 0))
+true_missing_masonry_cond = x_train['MasVnrType'].isna() & (x_train['MasVnrArea'].isna() | (x_train['MasVnrArea'] == 0))
+valid_type_nan_area_cond = ~(x_train['MasVnrType'].isna()) & (x_train['MasVnrArea'].isna() | (x_train['MasVnrArea'] == 0))
+nan_type_valid_area_cond = x_train['MasVnrType'].isna() & ~(x_train['MasVnrArea'].isna() | (x_train['MasVnrArea'] == 0))
 print(f"NaN MasVnrType + NaN MasVnrArea Count: {true_missing_masonry_cond.sum()}") # truly missing masonry veneers
 print(f"Valid MasVnrType + NaN MasVnrArea Count: {valid_type_nan_area_cond.sum()}") # area not calculated
 print(f"NaN MasVnrType + Valid MasVnrArea Count: {nan_type_valid_area_cond.sum()}\n") # type not recorded
 
-X.loc[true_missing_masonry_cond, "MasVnrType"] = "None" # "None" assigned to masonry veneer types that don't exist
-X.loc[true_missing_masonry_cond, "MasVnrArea"] = 0 # 0 assigned to masonry veneer areas that don't exist
-
-# mode obtained and assigned to masonry veneer types that were not recorded
-masvnrtype_mode = X.loc[X["MasVnrType"].notna(), "MasVnrType"].mode()[0]
-X.loc[nan_type_valid_area_cond, "MasVnrType"] = masvnrtype_mode
+x_train.loc[true_missing_masonry_cond, "MasVnrType"] = "None" # "None" assigned to masonry veneer types that don't exist
+x_train.loc[true_missing_masonry_cond, "MasVnrArea"] = 0 # 0 assigned to masonry veneer areas that don't exist
 
 # median obtained and assigned to masonry veneer areas that were not recorded
-masvnrarea_median = X.loc[(X["MasVnrArea"].notna()) & (X["MasVnrArea"] > 0), "MasVnrArea"].median()
-X.loc[valid_type_nan_area_cond, "MasVnrArea"] = masvnrarea_median
+masvnrarea_median = x_train.loc[(x_train["MasVnrArea"].notna()) & (x_train["MasVnrArea"] > 0), "MasVnrArea"].median()
+x_train.loc[valid_type_nan_area_cond, "MasVnrArea"] = masvnrarea_median
+
+# mode obtained and assigned to masonry veneer types that were not recorded
+masvnrtype_mode = x_train.loc[x_train["MasVnrType"].notna(), "MasVnrType"].mode()[0]
+x_train.loc[nan_type_valid_area_cond, "MasVnrType"] = masvnrtype_mode
+
+# apply same masonry transformations to test data using training values
+true_missing_masonry_cond_test = x_test['MasVnrType'].isna() & (x_test['MasVnrArea'].isna() | (x_test['MasVnrArea'] == 0))
+valid_type_nan_area_cond_test = ~(x_test['MasVnrType'].isna()) & (x_test['MasVnrArea'].isna() | (x_test['MasVnrArea'] == 0))
+nan_type_valid_area_cond_test = x_test['MasVnrType'].isna() & ~(x_test['MasVnrArea'].isna() | (x_test['MasVnrArea'] == 0))
+
+x_test.loc[true_missing_masonry_cond_test, "MasVnrType"] = "None"
+x_test.loc[true_missing_masonry_cond_test, "MasVnrArea"] = 0
+
+x_test.loc[valid_type_nan_area_cond_test, "MasVnrArea"] = masvnrarea_median
+x_test.loc[nan_type_valid_area_cond_test, "MasVnrType"] = masvnrtype_mode
 
 # features with missing values to be replaced with "None"
 replace_with_none = [
@@ -109,35 +123,41 @@ features_to_drop = [
 
 # imputing missing values
 none_imputer = SimpleImputer(strategy="constant", fill_value="None")
-X[replace_with_none] = none_imputer.fit_transform(X[replace_with_none])
+x_train[replace_with_none] = none_imputer.fit_transform(x_train[replace_with_none])
 
 zero_imputer = SimpleImputer(strategy="constant", fill_value=0)
-X[replace_with_0] = zero_imputer.fit_transform(X[replace_with_0])
+x_train[replace_with_0] = zero_imputer.fit_transform(x_train[replace_with_0])
 
 median_imputer = SimpleImputer(strategy="median")
-X[replace_with_median] = median_imputer.fit_transform(X[replace_with_median])
+x_train[replace_with_median] = median_imputer.fit_transform(x_train[replace_with_median])
 
-X.drop(columns=features_to_drop, inplace=True)
+x_train.drop(columns=features_to_drop, inplace=True)
+
+# transform test data with training-fitted imputers
+x_test[replace_with_none] = none_imputer.transform(x_test[replace_with_none])
+x_test[replace_with_0] = zero_imputer.transform(x_test[replace_with_0])
+x_test[replace_with_median] = median_imputer.transform(x_test[replace_with_median])
+x_test.drop(columns=features_to_drop, inplace=True)
 
 """ -- Scaling and Encoding -- """
 
 print("-- Features Sorting --\n")
-numeric_features = X.select_dtypes(include="number").columns.tolist()
-categorical_features = X.select_dtypes(include="object").columns.tolist()
+numeric_features = x_train.select_dtypes(include="number").columns.tolist()
+categorical_features = x_train.select_dtypes(include="object").columns.tolist()
 print(f"Numeric Features\n{numeric_features}\n")
 print(f"Categorical Features\n{categorical_features}\n")
 
 scale_robust = []
 scale_standard = []
 for col in numeric_features:
-    if X[col].skew() > 1:
+    if x_train[col].skew() > 1:
         scale_robust.append(col)
     else:
         scale_standard.append(col)
 
 print("-- Unique Values for Categorical Features --\n")
 for col in categorical_features:
-    print(f"{col}:{X[col].unique()}\n")
+    print(f"{col}:{x_train[col].unique()}\n")
 
 # features to be encoded using OHE
 encode_ohe = [
