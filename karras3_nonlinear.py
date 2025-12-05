@@ -1,17 +1,18 @@
 # CS 482 - Assignment 3
 # Author: Demetri Karras
-# File: karras3.py
+# File: karras3_nonlinear.py
 
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+from sklearn.metrics import r2_score
 from sklearn.compose import ColumnTransformer
 from sklearn.decomposition import PCA
 from sklearn.impute import SimpleImputer
+from sklearn.metrics import root_mean_squared_error
 from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
+from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder
 from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.svm import SVR
 
 data = pd.read_csv("houseSalePrices.csv")
 
@@ -29,10 +30,12 @@ print(f"First 5 Rows:\n{data.head()}\n")
 
 X = data.iloc[:, :-1]
 y = data.iloc[:, -1]  # target column
-x_train, x_test, y_train, y_test = train_test_split(X, y, 
-                                                    test_size=0.25, 
-                                                    shuffle=True, 
-                                                    random_state=42)
+x_train, x_test, y_train, y_test = train_test_split(
+    X, y, 
+    test_size=0.25, 
+    shuffle=True, 
+    random_state=42
+)
 
 """ ******** Data Preprocessing ******** """
 
@@ -150,10 +153,16 @@ print(f"Categorical Features\n{categorical_features}\n")
 scale_robust = []
 scale_standard = []
 for col in numeric_features:
-    if x_train[col].skew() > 1:
+    skew_val = x_train[col].skew()
+    nonzero_ratio = (x_train[col] != 0).mean()   # percentage of non-zero values
+
+    if skew_val > 1 and nonzero_ratio > 0.2:
         scale_robust.append(col)
     else:
         scale_standard.append(col)
+
+print(scale_robust)
+print(scale_standard)
 
 print("-- Unique Values for Categorical Features --\n")
 for col in categorical_features:
@@ -213,9 +222,9 @@ encode_binary = [
 ]
 
 # build encoders
-ohe_encoder = OneHotEncoder(sparse_output=False)
+ohe_encoder = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
 ordinal_encoder = OrdinalEncoder(categories=[encode_ordinal_mapping[col_name] for col_name in encode_ordinal_mapping])
-binary_encoder = OneHotEncoder(drop="if_binary", sparse_output=False)
+binary_encoder = OneHotEncoder(drop="if_binary", handle_unknown="ignore", sparse_output=False)
 
 # build preprocessor to handle scaling and encoding
 preprocessor = ColumnTransformer(
@@ -227,3 +236,130 @@ preprocessor = ColumnTransformer(
         ("binary_enc", binary_encoder, encode_binary)
     ]
 )
+
+pca = PCA(n_components=10)
+
+# fit and transform processor on training, transform test
+x_train_transformed = preprocessor.fit_transform(x_train)
+x_test_transformed = preprocessor.transform(x_test)
+
+# fit and transform PCA on training, transform test
+x_train_pca = pca.fit_transform(x_train_transformed)
+x_test_pca = pca.transform(x_test_transformed)
+
+# reform training data to DataFrame
+x_train = pd.DataFrame(
+    x_train_pca,
+    columns=pca.get_feature_names_out()
+)
+
+# reform training data to DataFrame
+x_test = pd.DataFrame(
+    x_test_pca,
+    columns=pca.get_feature_names_out()
+)
+
+print(" -- PCA Contributing Features -- \n")
+# build DataFrame table and display PCA contributing features
+preproc_feature_names = preprocessor.get_feature_names_out()
+loading_df = pd.DataFrame(
+    pca.components_[:2],
+    columns=preproc_feature_names,
+    index=["PC1", "PC2"]
+)
+print(round(loading_df.loc["PC1"].abs(), 2).sort_values(ascending=False).head(10))
+print()
+print(round(loading_df.loc["PC2"].abs(), 2).sort_values(ascending=False).head(10))
+print()
+
+# split training data into sub-training set and validation set
+x_train_sub, x_val, y_train_sub, y_val = train_test_split(
+    x_train, y_train, 
+    test_size=0.20, 
+    shuffle=True, 
+    random_state=42
+)
+
+# test different parameters for SVM and print results
+best_rmse = float("inf")
+best_params = None
+for gamma in range(1, 11, 2):
+    for cost in range(10, 101, 10):
+
+        model = SVR(kernel="rbf", gamma=gamma, C=cost)
+        model.fit(x_train_sub, y_train_sub)
+        
+        y_pred = model.predict(x_val)
+
+        rmse = root_mean_squared_error(y_val, y_pred)
+        r2 = r2_score(y_val, y_pred)
+
+        if rmse < best_rmse:
+            best_rmse = rmse
+            best_r2 = r2
+            best_params = (gamma, cost)
+
+print(" -- SVM Tuning Results -- \n")
+print(f"Best Gamma: {best_params[0]}\nBest Cost: {best_params[1]}")
+print(f"Best RMSE: {round(best_rmse, 2)}\nBest R^2: {round(best_r2, 2)}\n")
+
+# test different parameters for NN and print results
+best_rmse = float("inf")
+best_num_units = 0
+for num_units in range(10, 31, 2):
+
+    model = MLPRegressor(hidden_layer_sizes=(num_units,), random_state=42)
+    model.fit(x_train_sub, y_train_sub)
+
+    y_pred = model.predict(x_val)
+
+    rmse = root_mean_squared_error(y_val, y_pred)
+    r2 = r2_score(y_val, y_pred)
+
+    if rmse < best_rmse:
+            best_rmse = rmse
+            best_r2 = r2
+            best_num_units = num_units
+
+print(" -- NN Tuning Results -- \n")
+print(f"Best # of Hidden Units: {best_num_units}")
+print(f"Best RMSE: {round(best_rmse, 2)}\nBest R^2: {round(best_r2, 2)}\n")
+
+""" ******** Model Evaluation ******** """
+
+""" -- SVM Evaluation -- """
+
+best_gamma, best_cost = best_params
+
+# create final SVM model for evaluation, fitting on training data
+svm = SVR(kernel="rbf", gamma=best_gamma, C=best_cost)
+svm.fit(x_train, y_train)
+
+svm_y_test_pred = svm.predict(x_test)
+
+# get and display evaluation metrics for SVM
+svm_test_rmse = root_mean_squared_error(y_test, svm_y_test_pred)
+svm_test_r2 = r2_score(y_test, svm_y_test_pred)
+
+print(" -- SVM Evaluation -- \n")
+print("SVM Test RMSE:", round(svm_test_rmse, 2))
+print("SVM Test R^2:", round(svm_test_r2, 2))
+
+""" -- NN Evaluation -- """
+
+# create final NN model for evaluation, fitting on training data
+nn = MLPRegressor(
+    hidden_layer_sizes=(best_num_units,),
+    random_state=42
+)
+nn.fit(x_train, y_train)
+
+nn_y_test_pred = nn.predict(x_test)
+
+# get and display evaluation metrics for NN
+nn_test_rmse = root_mean_squared_error(y_test, nn_y_test_pred)
+nn_test_r2 = r2_score(y_test, nn_y_test_pred)
+
+print(" -- NN Evaluation -- \n")
+print("NN Test RMSE:", round(nn_test_rmse, 2))
+print("NN Test R^2:", round(nn_test_r2, 2))
